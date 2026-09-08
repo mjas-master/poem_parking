@@ -1,0 +1,153 @@
+#!/usr/bin/env bash
+# poem_parking 개발용 원샷 실행 스크립트
+#   ./dev-up.sh                      # 백엔드 + Flutter(macos 또는 chrome)
+#   FLUTTER_DEVICE=emulator-5554 ./dev-up.sh
+#   WITH_CONNECTOR=1 ./dev-up.sh     # PC 연동 프로그램(Mock 어댑터)도 함께 실행 → 등록 후 30초 입차/2분 출차 자동 발생
+set -euo pipefail
+
+PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BACKEND_DIR="$PROJECT_DIR/backend"
+FRONTEND_DIR="$PROJECT_DIR/mobile"
+CONNECTOR_DIR="$PROJECT_DIR/pc-connector"
+BACKEND_LOG="$BACKEND_DIR/build/dev-up.log"
+CONNECTOR_LOG="$CONNECTOR_DIR/build/dev-up.log"
+BACKEND_PORT="${BACKEND_PORT:-8080}"
+HEALTH_URL="http://localhost:${BACKEND_PORT}/api/v1/auth/apartments"   # permitAll 엔드포인트
+FLUTTER_DEVICE="${FLUTTER_DEVICE:-}"
+WITH_CONNECTOR="${WITH_CONNECTOR:-0}"
+
+cleanup() {
+  for pid_var in CONNECTOR_PID BACKEND_PID; do
+    pid="${!pid_var:-}"
+    if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+      echo "Stopping ${pid_var%_PID} (PID: $pid)..."
+      kill "$pid" 2>/dev/null || true
+      wait "$pid" 2>/dev/null || true
+    fi
+  done
+}
+trap cleanup EXIT INT TERM
+
+# ---- JDK 21 강제 (Gradle/Kotlin DSL이 최신 JDK를 처리하지 못하는 경우 대비)
+JDK21_HOME="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home"
+if [[ -x "$JDK21_HOME/bin/java" ]]; then
+  export JAVA_HOME="$JDK21_HOME"
+  export PATH="$JAVA_HOME/bin:$PATH"
+elif [[ -n "${JAVA_HOME:-}" ]] && [[ -x "$JAVA_HOME/bin/java" ]]; then
+  JAVA_VERSION_OUTPUT="$("$JAVA_HOME/bin/java" -version 2>&1 | head -n 1)"
+  if [[ "$JAVA_VERSION_OUTPUT" != *" 21."* && "$JAVA_VERSION_OUTPUT" != *"\"21"* ]]; then
+    echo "현재 Java 버전은 21이 아닙니다: ${JAVA_VERSION_OUTPUT}" >&2
+    echo "dev-up은 JDK 21이 필요합니다." >&2
+    echo "예: export JAVA_HOME=\"$JDK21_HOME\" && export PATH=\"\$JAVA_HOME/bin:\$PATH\"" >&2
+    exit 1
+  fi
+else
+  echo "JDK 21을 찾을 수 없습니다. JAVA_HOME을 JDK 21 경로로 설정하세요." >&2
+  echo "예: export JAVA_HOME=\"$JDK21_HOME\" && export PATH=\"\$JAVA_HOME/bin:\$PATH\"" >&2
+  exit 1
+fi
+command -v java >/dev/null 2>&1 || { echo "java 실행 파일을 찾을 수 없습니다." >&2; exit 1; }
+command -v flutter >/dev/null 2>&1 || { echo "Flutter SDK를 찾을 수 없습니다." >&2; exit 1; }
+
+# ---- Gradle wrapper 없으면 생성
+ensure_wrapper() {
+  local dir="$1"
+  if [[ ! -x "$dir/gradlew" ]]; then
+    if command -v gradle >/dev/null 2>&1; then
+      echo "$(basename "$dir")/gradlew 가 없어 생성합니다..."
+      (cd "$dir" && gradle wrapper --gradle-version 8.10.2 -q)
+    else
+      echo "$(basename "$dir")/gradlew 가 없고 gradle 명령도 없습니다. 'brew install gradle' 후 다시 실행하세요." >&2
+      exit 1
+    fi
+  fi
+}
+ensure_wrapper "$BACKEND_DIR"
+[[ "$WITH_CONNECTOR" == "1" ]] && ensure_wrapper "$CONNECTOR_DIR"
+
+# ---- Flutter 대상 선택 + API base URL 결정
+if [[ -z "$FLUTTER_DEVICE" ]]; then
+  if xcodebuild -version >/dev/null 2>&1; then
+    FLUTTER_DEVICE="macos"
+  else
+    FLUTTER_DEVICE="chrome"
+    echo "Xcode를 사용할 수 없어 Flutter 디버깅 대상으로 Chrome을 선택합니다."
+  fi
+fi
+case "$FLUTTER_DEVICE" in
+  emulator-*|*android*) API_BASE_URL="${API_BASE_URL:-http://10.0.2.2:${BACKEND_PORT}}" ;;   # Android 에뮬레이터
+  *)                    API_BASE_URL="${API_BASE_URL:-http://localhost:${BACKEND_PORT}}" ;;
+esac
+
+# ---- Flutter 플랫폼 폴더/의존성 준비
+cd "$FRONTEND_DIR"
+if [[ ! -d "$FRONTEND_DIR/$FLUTTER_DEVICE" && ( "$FLUTTER_DEVICE" == "macos" || "$FLUTTER_DEVICE" == "chrome" ) ]]; then
+  platform="$FLUTTER_DEVICE"; [[ "$platform" == "chrome" ]] && platform="web"
+  echo "Flutter 플랫폼 폴더($platform)를 생성합니다..."
+  flutter create . --platforms="$platform" --project-name poem_parking >/dev/null
+fi
+if [[ "$FLUTTER_DEVICE" == "macos" ]]; then
+  # macOS 앱이 localhost로 나가려면 network.client 엔티틀먼트 필요
+  for ent in macos/Runner/DebugProfile.entitlements macos/Runner/Release.entitlements; do
+    if [[ -f "$ent" ]] && ! grep -q "com.apple.security.network.client" "$ent"; then
+      sed -i '' 's#</dict>#\t<key>com.apple.security.network.client</key>\n\t<true/>\n</dict>#' "$ent"
+      echo "네트워크 엔티틀먼트 추가: $ent"
+    fi
+  done
+fi
+if [[ "$FLUTTER_DEVICE" == emulator-* || "$FLUTTER_DEVICE" == *android* ]]; then
+  manifest="android/app/src/main/AndroidManifest.xml"
+  if [[ -f "$manifest" ]] && ! grep -q "usesCleartextTraffic" "$manifest"; then
+    sed -i '' 's#<application#<application android:usesCleartextTraffic="true"#' "$manifest"
+    echo "Android cleartext(http) 허용 추가: $manifest"
+  fi
+fi
+flutter pub get >/dev/null
+
+# ---- 기존 백엔드 프로세스 정리
+if lsof -ti :"$BACKEND_PORT" >/dev/null 2>&1; then
+  echo "포트 ${BACKEND_PORT}을 점유 중인 기존 프로세스를 정리합니다..."
+  kill -9 $(lsof -ti :"$BACKEND_PORT") 2>/dev/null || true
+  sleep 1
+fi
+
+# ---- 백엔드 시작
+mkdir -p "$(dirname "$BACKEND_LOG")"
+echo "Starting backend at http://localhost:${BACKEND_PORT}..."
+(cd "$BACKEND_DIR" && ./gradlew bootRun --args="--server.port=${BACKEND_PORT}") >"$BACKEND_LOG" 2>&1 &
+BACKEND_PID=$!
+
+for _ in {1..120}; do
+  if ! kill -0 "$BACKEND_PID" 2>/dev/null; then
+    echo "Backend failed to start. Log: $BACKEND_LOG" >&2
+    tail -n 30 "$BACKEND_LOG" >&2
+    exit 1
+  fi
+  if curl --fail --silent "$HEALTH_URL" >/dev/null 2>&1; then
+    echo "Backend is ready."
+    echo "  Swagger : http://localhost:${BACKEND_PORT}/swagger-ui/index.html"
+    echo "  H2      : http://localhost:${BACKEND_PORT}/h2  (jdbc:h2:file:./data/parking, sa)"
+    echo "  목업     : OTP 123456 / 아파트 인증코드 000000 / 아파트 APT-0001"
+    break
+  fi
+  sleep 1
+done
+if ! curl --fail --silent "$HEALTH_URL" >/dev/null 2>&1; then
+  echo "Backend startup timed out. Log: $BACKEND_LOG" >&2
+  tail -n 30 "$BACKEND_LOG" >&2
+  exit 1
+fi
+
+# ---- (선택) PC 연동 프로그램 Mock
+if [[ "$WITH_CONNECTOR" == "1" ]]; then
+  mkdir -p "$(dirname "$CONNECTOR_LOG")"
+  [[ -f "$CONNECTOR_DIR/connector.properties" ]] || cp "$CONNECTOR_DIR/connector.properties.example" "$CONNECTOR_DIR/connector.properties"
+  sed -i '' "s#^server.baseUrl=.*#server.baseUrl=http://localhost:${BACKEND_PORT}#" "$CONNECTOR_DIR/connector.properties"
+  echo "Starting PC connector (mock adapter)... log: $CONNECTOR_LOG"
+  (cd "$CONNECTOR_DIR" && ./gradlew run -q) >"$CONNECTOR_LOG" 2>&1 &
+  CONNECTOR_PID=$!
+fi
+
+# ---- Flutter 실행 (포그라운드, 종료 시 trap이 백엔드/커넥터 정리)
+echo "Starting Flutter on '$FLUTTER_DEVICE' (API_BASE_URL=$API_BASE_URL)..."
+flutter run -d "$FLUTTER_DEVICE" --dart-define=API_BASE_URL="$API_BASE_URL"

@@ -1,0 +1,115 @@
+#!/usr/bin/env bash
+# poem_parking Android APK 빌드 → 레포 루트에 poem_parking.apk 로 저장
+#   ./build-apk.sh                                  # release APK, API 주소는 이 Mac의 LAN IP 자동 감지
+#   API_BASE_URL=http://192.168.0.10:8080 ./build-apk.sh
+#   BUILD_MODE=debug ./build-apk.sh                 # debug APK
+#   INSTALL=1 ./build-apk.sh                        # 빌드 후 연결된 기기에 adb 설치
+#   SPLIT=1 ./build-apk.sh                          # ABI별 분할 APK (용량 축소)
+set -euo pipefail
+
+PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+FRONTEND_DIR="$PROJECT_DIR/mobile"
+BUILD_MODE="${BUILD_MODE:-release}"
+INSTALL="${INSTALL:-0}"
+SPLIT="${SPLIT:-0}"
+BACKEND_PORT="${BACKEND_PORT:-8080}"
+
+command -v flutter >/dev/null 2>&1 || { echo "Flutter SDK를 찾을 수 없습니다." >&2; exit 1; }
+
+# ---- JDK 21 강제 (Gradle 9.x는 JDK 26을 지원하지 않음 → "Unsupported class file major version 70")
+JDK21_HOME="${JDK21_HOME:-/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home}"
+if [[ ! -x "$JDK21_HOME/bin/java" ]] && command -v /usr/libexec/java_home >/dev/null 2>&1; then
+  JDK21_HOME="$(/usr/libexec/java_home -v 21 2>/dev/null || true)"
+fi
+if [[ -x "${JDK21_HOME:-}/bin/java" ]]; then
+  export JAVA_HOME="$JDK21_HOME"
+  export PATH="$JAVA_HOME/bin:$PATH"
+  # Flutter는 JAVA_HOME보다 flutter config의 jdk-dir을 우선하므로 함께 지정
+  flutter config --jdk-dir "$JAVA_HOME" >/dev/null
+  echo "Gradle용 JDK: $JAVA_HOME"
+else
+  echo "JDK 21을 찾을 수 없습니다. 'brew install openjdk@21' 후 다시 실행하세요." >&2
+  echo "또는 JDK21_HOME=<경로> ./build-apk.sh" >&2
+  exit 1
+fi
+
+# ---- API 주소: 실기기는 localhost가 안 되므로 Mac의 LAN IP를 기본값으로 사용
+if [[ -z "${API_BASE_URL:-}" ]]; then
+  LAN_IP=""
+  for iface in en0 en1 en2; do
+    LAN_IP="$(ipconfig getifaddr "$iface" 2>/dev/null || true)"
+    [[ -n "$LAN_IP" ]] && break
+  done
+  if [[ -z "$LAN_IP" ]]; then
+    echo "LAN IP를 감지할 수 없습니다. API_BASE_URL=http://<서버IP>:${BACKEND_PORT} 로 지정하세요." >&2
+    exit 1
+  fi
+  API_BASE_URL="http://${LAN_IP}:${BACKEND_PORT}"
+fi
+
+cd "$FRONTEND_DIR"
+
+# ---- android/ 폴더 없으면 생성 + http 허용 패치
+if [[ ! -d android ]]; then
+  echo "Flutter Android 플랫폼 폴더를 생성합니다..."
+  flutter create . --platforms=android --project-name poem_parking >/dev/null
+fi
+MANIFEST="android/app/src/main/AndroidManifest.xml"
+if ! grep -q "usesCleartextTraffic" "$MANIFEST"; then
+  sed -i '' 's#<application#<application android:usesCleartextTraffic="true"#' "$MANIFEST"
+  echo "Android cleartext(http) 허용 추가: $MANIFEST"
+fi
+if ! grep -q "android.permission.INTERNET" "$MANIFEST"; then
+  sed -i '' 's#<manifest\([^>]*\)>#<manifest\1>\n    <uses-permission android:name="android.permission.INTERNET"/>#' "$MANIFEST"
+  echo "INTERNET 권한 추가: $MANIFEST"
+fi
+
+flutter pub get >/dev/null
+
+# ---- 빌드
+VERSION="$(grep -E '^version:' pubspec.yaml | awk '{print $2}' | tr -d '\r')"
+STAMP="$(date +%Y%m%d-%H%M%S)"
+ARGS=(--"$BUILD_MODE" --dart-define=API_BASE_URL="$API_BASE_URL")
+[[ "$SPLIT" == "1" ]] && ARGS+=(--split-per-abi)
+
+echo "Building APK ($BUILD_MODE, API_BASE_URL=$API_BASE_URL)..."
+flutter build apk "${ARGS[@]}"
+
+# ---- 레포 루트로 복사
+OUT_DIR="build/app/outputs/flutter-apk"
+shopt -s nullglob
+COPIED=()
+if [[ "$SPLIT" == "1" ]]; then
+  for apk in "$OUT_DIR"/app-*-"$BUILD_MODE".apk; do
+    abi="$(basename "$apk" .apk)"; abi="${abi#app-}"; abi="${abi%-$BUILD_MODE}"   # arm64-v8a
+    dest="$PROJECT_DIR/poem_parking-${abi}.apk"
+    cp "$apk" "$dest"; COPIED+=("$dest")
+  done
+else
+  src="$OUT_DIR/app-${BUILD_MODE}.apk"
+  [[ -f "$src" ]] || { echo "빌드된 APK를 찾을 수 없습니다: $src" >&2; exit 1; }
+  dest="$PROJECT_DIR/poem_parking.apk"
+  cp "$src" "$dest"; COPIED+=("$dest")
+fi
+[[ ${#COPIED[@]} -gt 0 ]] || { echo "빌드된 APK를 찾을 수 없습니다: $OUT_DIR" >&2; exit 1; }
+
+echo
+echo "APK 저장 완료 (v${VERSION}, ${BUILD_MODE}, ${STAMP}):"
+for f in "${COPIED[@]}"; do echo "  $f  ($(du -h "$f" | cut -f1))"; done
+
+# ---- (선택) adb 설치
+if [[ "$INSTALL" == "1" ]]; then
+  if ! command -v adb >/dev/null 2>&1; then
+    echo "adb를 찾을 수 없습니다. Android SDK platform-tools를 PATH에 추가하세요." >&2
+    exit 1
+  fi
+  if [[ -z "$(adb devices | awk 'NR>1 && $2=="device"')" ]]; then
+    echo "연결된 Android 기기가 없습니다. (USB 디버깅 확인)" >&2
+    exit 1
+  fi
+  echo "Installing on device..."
+  adb install -r "${COPIED[0]}"
+fi
+
+echo
+echo "주의: 실기기는 이 Mac과 같은 Wi-Fi에 있어야 하고, 백엔드가 ${API_BASE_URL} 에서 실행 중이어야 합니다 (./dev-up.sh 또는 backend/gradlew bootRun)."
