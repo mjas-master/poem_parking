@@ -1,0 +1,58 @@
+spring:
+  application:
+    name: poem-parking-backend
+  datasource:
+    url: jdbc:h2:file:./data/parking;MODE=PostgreSQL;AUTO_SERVER=TRUE
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
+  jpa:
+    hibernate:
+      ddl-auto: update
+    open-in-view: false
+    properties:
+      hibernate.format_sql: true
+  h2:
+    console:
+      enabled: true
+      path: /h2
+
+server:
+  port: 8080
+
+app:
+  jwt:
+    secret: change-me-to-a-very-long-random-secret-at-least-32-bytes-long!!
+    expiration-minutes: 43200   # 30 days
+  connector:
+    # PC 연동 프로그램이 사용하는 API Key (아파트 단위로 1개)
+    api-keys:
+      APT-0001: connector-key-apt-0001
+  mock:
+    # 목업 인증 코드 (실 서비스에서는 관리사무소 발급 코드/OTP로 대체)
+    apartment-verify-code: "000000"
+    sms-otp: "123456"
+
+logging:
+  level:
+    com.poem.parking: DEBUG
+
+---
+spring:
+  config:
+    activate:
+      on-profile: prod
+  datasource:
+    url: ${DB_URL}
+    username: ${DB_USER}
+    password: ${DB_PASSWORD}
+    driver-class-name: org.postgresql.Driver
+  jpa:
+    hibernate:
+      ddl-auto: validate
+  h2:
+    console:
+      enabled: false
+app:
+  jwt:
+    secret: ${JWT_SECRET}

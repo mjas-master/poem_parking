@@ -1,0 +1,8 @@
+server.baseUrl=http://localhost:8080
+apartment.code=APT-0001
+connector.apiKey=connector-key-apt-0001
+poll.intervalSeconds=10
+heartbeat.intervalSeconds=60
+# 주차관리 프로그램 어댑터: mock | (추후) vendorX
+adapter=mock
+local.db=./connector.db
