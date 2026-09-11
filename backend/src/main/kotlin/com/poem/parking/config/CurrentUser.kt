@@ -18,7 +18,7 @@ class CurrentUser(
     fun user(): User {
         val p = SecurityContextHolder.getContext().authentication?.principal as? Principal.AppUser
             ?: throw UnauthorizedException("로그인이 필요합니다.")
-        return userRepository.findById(p.userId).orElseThrow { UnauthorizedException("사용자를 찾을 수 없습니다.") }
+        return userRepository.findWithHouseholdById(p.userId) ?: throw UnauthorizedException("사용자를 찾을 수 없습니다.")
     }
 
     /** 아파트 인증까지 완료한 사용자 */

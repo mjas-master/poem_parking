@@ -20,15 +20,15 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
 
   Future<void> _sendOtp() async {
     final phone = _phone.text.replaceAll('-', '').trim();
-    if (!RegExp(r'^01[016789]\d{7,8}$').hasMatch(phone)) {
-      showError(context, '휴대폰 번호를 확인하세요.');
+    if (phone.isEmpty) {
+      showError(context, '휴대폰 번호를 입력하세요.');
       return;
     }
     setState(() => _busy = true);
     try {
       await ref.read(authProvider.notifier).requestOtp(phone);
       setState(() => _otpSent = true);
-      if (mounted) showInfo(context, '인증번호가 발송되었습니다. (개발용: 123456)');
+      if (mounted) showInfo(context, '인증번호가 발송되었습니다. (아무 값이나 입력 가능)');
     } catch (e) {
       if (mounted) showError(context, e.toString());
     } finally {
@@ -39,8 +39,9 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   Future<void> _login() async {
     setState(() => _busy = true);
     try {
+      final otpVal = _otp.text.trim().isEmpty ? '123456' : _otp.text.trim();
       await ref.read(authProvider.notifier).login(
-            _phone.text.replaceAll('-', '').trim(), _otp.text.trim(), _name.text.trim().isEmpty ? null : _name.text.trim());
+            _phone.text.replaceAll('-', '').trim(), otpVal, _name.text.trim().isEmpty ? null : _name.text.trim());
     } catch (e) {
       if (mounted) showError(context, e.toString());
     } finally {
@@ -67,14 +68,28 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
             decoration: const InputDecoration(labelText: '휴대폰 번호', hintText: '01012345678'),
           ),
           const SizedBox(height: 12),
-          if (!_otpSent)
-            FilledButton(onPressed: _busy ? null : _sendOtp, child: const Text('인증번호 받기'))
-          else ...[
+          if (!_otpSent) ...[
+            FilledButton(onPressed: _busy ? null : _sendOtp, child: const Text('인증번호 받기')),
+            const SizedBox(height: 8),
+            OutlinedButton(
+              onPressed: _busy ? null : () async {
+                setState(() => _busy = true);
+                try {
+                  await ref.read(authProvider.notifier).login(
+                        '01012345678', '123456', '테스트유저');
+                } catch (e) {
+                  if (mounted) showError(context, e.toString());
+                } finally {
+                  if (mounted) setState(() => _busy = false);
+                }
+              },
+              child: const Text('테스트 빠른 시작 (인증 및 동호수 자동 세팅)'),
+            ),
+          ] else ...[
             TextField(
               controller: _otp,
-              keyboardType: TextInputType.number,
-              maxLength: 6,
-              decoration: const InputDecoration(labelText: '인증번호 6자리'),
+              keyboardType: TextInputType.text,
+              decoration: const InputDecoration(labelText: '인증번호 (아무 값이나 입력 가능)'),
             ),
             TextField(controller: _name, decoration: const InputDecoration(labelText: '이름 (선택)')),
             const SizedBox(height: 16),

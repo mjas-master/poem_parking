@@ -1,0 +1,73 @@
+name: Deploy Mobile (Flutter Web)
+
+on:
+  push:
+    branches: [develop]
+    paths:
+      - 'mobile/**'
+      - '.github/workflows/mobile-dev.yml'
+  workflow_dispatch:
+
+env:
+  BACKEND_IMAGE: ghcr.io/${{ github.repository_owner }}/poem-parking-backend:develop
+  POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+          cache-key: "flutter-:channel:-:version:-:arch:-:hash:"
+
+      - name: Build Flutter Web
+        run: |
+          cd mobile
+          flutter pub get
+          flutter build web --release --dart-define=API_BASE_URL=${{ secrets.API_BASE_URL || 'https://your-domain.com' }}
+
+      - name: Transfer Web Build & Caddyfile to Server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          source: "mobile/build/web/*,deploy/Caddyfile"
+          target: "/opt/poem-parking"
+          strip_components: 1
+
+      - name: Reload Caddy Service
+        uses: appleboy/ssh-action@v1.2.0
+        env:
+          BACKEND_IMAGE: ${{ env.BACKEND_IMAGE }}
+          POSTGRES_PASSWORD: ${{ env.POSTGRES_PASSWORD }}
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          envs: BACKEND_IMAGE,POSTGRES_PASSWORD
+          script: |
+            set -eu
+            cd /opt/poem-parking
+            export BACKEND_IMAGE="${BACKEND_IMAGE}"
+            export POSTGRES_PASSWORD="${POSTGRES_PASSWORD}"
+            test -f build/web/index.html
+            mkdir -p html
+            find html -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+            cp -a build/web/. html/
+            rm -rf build
+
+            test -s html/index.html
+            test -s html/flutter_bootstrap.js
+            docker compose up -d frontend
+            docker compose exec -T frontend caddy validate --config /etc/caddy/Caddyfile
+            docker compose exec -T frontend caddy reload --config /etc/caddy/Caddyfile

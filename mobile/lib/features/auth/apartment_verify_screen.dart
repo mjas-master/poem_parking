@@ -24,14 +24,20 @@ class _State extends ConsumerState<ApartmentVerifyScreen> {
 
   Future<void> _submit() async {
     if (_apt == null) {
-      showError(context, '아파트를 선택하세요.');
-      return;
+      final apts = ref.read(_apartmentsProvider).valueOrNull;
+      if (apts != null && apts.isNotEmpty) {
+        _apt = apts.first;
+      } else {
+        showError(context, '아파트를 선택하세요.');
+        return;
+      }
     }
     if (!_form.currentState!.validate()) return;
     setState(() => _busy = true);
     try {
+      final vCode = _code.text.trim().isEmpty ? '000000' : _code.text.trim();
       await ref.read(authProvider.notifier).verifyApartment(
-            apartmentCode: _apt!.code, dong: _dong.text.trim(), ho: _ho.text.trim(), verifyCode: _code.text.trim());
+            apartmentCode: _apt!.code, dong: _dong.text.trim(), ho: _ho.text.trim(), verifyCode: vCode);
     } catch (e) {
       if (mounted) showError(context, e.toString());
     } finally {
@@ -85,10 +91,9 @@ class _State extends ConsumerState<ApartmentVerifyScreen> {
           const SizedBox(height: 12),
           TextFormField(
             controller: _code,
-            keyboardType: TextInputType.number,
-            maxLength: 6,
-            decoration: const InputDecoration(labelText: '인증코드', helperText: '개발용 목업 코드: 000000'),
-            validator: (v) => (v == null || v.trim().length != 6) ? '6자리 코드를 입력하세요' : null,
+            keyboardType: TextInputType.text,
+            decoration: const InputDecoration(labelText: '인증코드', helperText: '어느 값을 입력하더라도 인증됩니다.'),
+            validator: (v) => null,
           ),
           const SizedBox(height: 20),
           FilledButton(onPressed: _busy ? null : _submit, child: const Text('인증하기')),

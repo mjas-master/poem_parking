@@ -18,6 +18,9 @@ interface HouseholdRepository : JpaRepository<Household, Long> {
 
 interface UserRepository : JpaRepository<User, Long> {
     fun findByPhone(phone: String): User?
+    
+    @org.springframework.data.jpa.repository.EntityGraph(attributePaths = ["household", "household.apartment"])
+    fun findWithHouseholdById(id: Long): User?
 }
 
 interface VisitorRegistrationRepository : JpaRepository<VisitorRegistration, Long> {

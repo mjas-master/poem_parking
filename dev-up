@@ -127,7 +127,7 @@ for _ in {1..120}; do
     echo "Backend is ready."
     echo "  Swagger : http://localhost:${BACKEND_PORT}/swagger-ui/index.html"
     echo "  H2      : http://localhost:${BACKEND_PORT}/h2  (jdbc:h2:file:./data/parking, sa)"
-    echo "  목업     : OTP 123456 / 아파트 인증코드 000000 / 아파트 APT-0001"
+    echo "  목업     : OTP (어느 값이나 허용) / 아파트 인증코드 (어느 값이나 허용) / 아파트 APT-0001"
     break
   fi
   sleep 1

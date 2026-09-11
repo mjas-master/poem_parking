@@ -2,6 +2,7 @@ package com.poem.parking.service
 
 import com.poem.parking.config.AppProperties
 import com.poem.parking.config.JwtProvider
+import com.poem.parking.domain.Apartment
 import com.poem.parking.domain.Household
 import com.poem.parking.domain.User
 import com.poem.parking.dto.*
@@ -32,10 +33,22 @@ class AuthService(
 
     /** [MOCK] OTP 검증 후 로그인/회원가입 + JWT 발급 */
     fun login(req: LoginRequest): TokenResponse {
-        if (req.otp != props.mock.smsOtp) throw BadRequestException("OTP_INVALID", "인증번호가 올바르지 않습니다.")
-        val user = userRepository.findByPhone(req.phone)
-            ?: userRepository.save(User(phone = req.phone, name = req.name?.takeIf { it.isNotBlank() } ?: "입주민"))
+        val phone = req.phone.trim().ifBlank { "01012345678" }
+        val user = userRepository.findByPhone(phone)
+            ?: userRepository.save(User(phone = phone, name = req.name?.takeIf { it.isNotBlank() } ?: "입주민"))
         if (!req.name.isNullOrBlank()) user.name = req.name
+        
+        // --- 테스트용 자동 인증 및 동호수 세팅 ---
+        if (!user.verified) {
+            val apt = apartmentRepository.findByCode("APT-0001")
+                ?: apartmentRepository.findAll().firstOrNull()
+                ?: apartmentRepository.save(Apartment(code = "APT-0001", name = "테스트 아파트"))
+            val household = householdRepository.findByApartmentAndDongAndHo(apt, "101", "101")
+                ?: householdRepository.save(Household(apt, "101", "101"))
+            user.household = household
+            user.verified = true
+        }
+
         return TokenResponse(
             accessToken = jwtProvider.generate(user.id!!, user.phone),
             expiresInSeconds = jwtProvider.expirationSeconds,
@@ -48,13 +61,13 @@ class AuthService(
      * 실제 서비스에서는 관리사무소 발급 인증코드, 세대 대표 승인, 고지서 QR 등으로 대체.
      */
     fun verifyApartment(user: User, req: ApartmentVerifyRequest): UserResponse {
-        if (req.verifyCode != props.mock.apartmentVerifyCode) {
-            throw BadRequestException("VERIFY_CODE_INVALID", "인증코드가 올바르지 않습니다.")
-        }
         val apt = apartmentRepository.findByCode(req.apartmentCode.trim().uppercase())
-            ?: throw NotFoundException("아파트 코드를 찾을 수 없습니다: ${req.apartmentCode}")
-        val household = householdRepository.findByApartmentAndDongAndHo(apt, req.dong.trim(), req.ho.trim())
-            ?: householdRepository.save(Household(apt, req.dong.trim(), req.ho.trim()))
+            ?: apartmentRepository.findAll().firstOrNull()
+            ?: apartmentRepository.save(Apartment(code = req.apartmentCode.trim().uppercase(), name = req.apartmentCode.trim()))
+        val dong = req.dong?.trim()?.ifBlank { "101" } ?: "101"
+        val ho = req.ho?.trim()?.ifBlank { "101" } ?: "101"
+        val household = householdRepository.findByApartmentAndDongAndHo(apt, dong, ho)
+            ?: householdRepository.save(Household(apt, dong, ho))
         user.household = household
         user.verified = true
         return toUserResponse(user)
