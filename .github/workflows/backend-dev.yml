@@ -76,7 +76,7 @@ jobs:
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: ${{ secrets.SSH_PORT || 22 }}
           source: deploy/docker-compose.yml
-          target: /opt/poem-parking
+          target: /home/ubuntu/poem-parking
           strip_components: 1
 
       - uses: appleboy/ssh-action@v1
@@ -93,8 +93,8 @@ jobs:
           envs: BACKEND_IMAGE,POSTGRES_PASSWORD,GHCR_USERNAME,GHCR_PULL_TOKEN
           script: |
             set -eu
-            mkdir -p /opt/poem-parking
-            cd /opt/poem-parking
+            mkdir -p /home/ubuntu/poem-parking
+            cd /home/ubuntu/poem-parking
 
             if [ -n "${GHCR_PULL_TOKEN}" ]; then
               echo "${GHCR_PULL_TOKEN}" | docker login ghcr.io -u "${GHCR_USERNAME}" --password-stdin
