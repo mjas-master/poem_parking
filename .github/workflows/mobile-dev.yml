@@ -41,7 +41,7 @@ jobs:
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: ${{ secrets.SSH_PORT || 22 }}
           source: "mobile/build/web/*,deploy/Caddyfile"
-          target: "/opt/poem-parking"
+          target: "/home/ubuntu/poem-parking"
           strip_components: 1
 
       - name: Reload Caddy Service
@@ -57,7 +57,7 @@ jobs:
           envs: BACKEND_IMAGE,POSTGRES_PASSWORD
           script: |
             set -eu
-            cd /opt/poem-parking
+            cd /home/ubuntu/poem-parking
             export BACKEND_IMAGE="${BACKEND_IMAGE}"
             export POSTGRES_PASSWORD="${POSTGRES_PASSWORD}"
             test -f build/web/index.html
